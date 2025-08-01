@@ -8,6 +8,8 @@ local Shared = ReplicatedStorage:FindFirstChild("Shared")
 local Remotes = Shared:FindFirstChild("Remotes")
 
 local ChessBoardGUI = Assets:FindFirstChild("ChessBoardGui")
+local Pieces = Assets:FindFirstChild("Pieces")
+local Sounds = Assets:FindFirstChild("Sounds")
 
 local Piece = require(ReplicatedStorage.Shared.Piece)
 local Util = require(ReplicatedStorage.Shared.ChessUtil)
@@ -27,16 +29,17 @@ Chess.PlayerColor = nil
 Chess.SelectedSquare = nil
 Chess.HighlightedMoves = {}
 Chess.CurrentFEN = nil
+Chess.LastMove = nil
 
 local StandardPosition = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
-local PieceTypes = {
-	[Piece.King] = "K",
-	[Piece.Queen] = "Q",
-	[Piece.Rook] = "R",
-	[Piece.Bishop] = "B",
-	[Piece.Knight] = "N",
-	[Piece.Pawn] = "P"
+local PieceNames = {
+	[Piece.King] = "king",
+	[Piece.Queen] = "queen",
+	[Piece.Rook] = "rook",
+	[Piece.Bishop] = "bishop",
+	[Piece.Knight] = "knight",
+	[Piece.Pawn] = "pawn"
 }
 
 -- Store connections to prevent duplicates
@@ -65,7 +68,17 @@ function Chess.Start(Opponent, PieceColor)
 	Chess.CurrentFEN = StandardPosition
 	Chess.CurrentBoard = {
 		Square = table.create(64, 0),
-		ColourToMove = Piece.White
+		ColourToMove = Piece.White,
+		CastlingRights = {
+			WhiteKingside = true,
+			WhiteQueenside = true,
+			BlackKingside = true,
+			BlackQueenside = true
+		},
+		EnPassantSquare = 0,
+		HalfmoveClock = 0,
+		FullmoveNumber = 1,
+		GameState = "Playing"
 	}
 	
 	if PieceColor == Piece.White then
@@ -78,7 +91,18 @@ end
 
 function Chess.RenderFENToGUI(BoardFrame, fen)
 	local board = {
-		Square = table.create(64, 0)
+		Square = table.create(64, 0),
+		ColourToMove = Piece.White,
+		CastlingRights = {
+			WhiteKingside = true,
+			WhiteQueenside = true,
+			BlackKingside = true,
+			BlackQueenside = true
+		},
+		EnPassantSquare = 0,
+		HalfmoveClock = 0,
+		FullmoveNumber = 1,
+		GameState = "Playing"
 	}
 	
 	Util.LoadPositionFromFen(board, fen)
@@ -93,23 +117,46 @@ function Chess.RenderFENToGUI(BoardFrame, fen)
 			squareFrame.Piece:Destroy()
 		end
 		
-		if pieceType ~= Piece.None and pieceColor then
-			local pieceFrame = Instance.new("Frame")
-			pieceFrame.Size = UDim2.fromScale(1, 1)
-			pieceFrame.BackgroundColor3 = pieceColor == "White" and Color3.fromRGB(240, 240, 240) or Color3.fromRGB(30, 30, 30)
-			pieceFrame.Name = "Piece"
-
-			local label = Instance.new("TextLabel")
-			label.Text = PieceTypes[pieceType]
-			label.TextColor3 = pieceColor == "White" and Color3.fromRGB(0, 0, 0) or Color3.fromRGB(255, 255, 255)
-			label.BackgroundTransparency = 1
-			label.Size = UDim2.new(1, 0, 1, 0)
-			label.Font = Enum.Font.SourceSansBold
-			label.TextScaled = true
-			label.Parent = pieceFrame
-
-			pieceFrame.Parent = squareFrame
+		if squareFrame:FindFirstChild("LastMoveHighlight") then
+			squareFrame.LastMoveHighlight:Destroy()
 		end
+		
+		if pieceType ~= Piece.None and pieceColor then
+			local colorName = pieceColor == "White" and "white" or "black"
+			local pieceName = PieceNames[pieceType]
+			local decalName = colorName .. "-" .. pieceName
+			local decal = Pieces:FindFirstChild(decalName)
+			
+			if decal then
+				local pieceImage = Instance.new("ImageLabel")
+				pieceImage.Size = UDim2.fromScale(1, 1)
+				pieceImage.BackgroundTransparency = 1
+				pieceImage.Image = decal.Texture
+				pieceImage.Name = "Piece"
+				pieceImage.Parent = squareFrame
+			end
+		end
+	end
+	
+	Chess.HighlightLastMove()
+end
+
+function Chess.HighlightLastMove()
+	if not Chess.LastMove or not Chess.CurrentBoardGUI then
+		return
+	end
+	
+	local fromSquare = Chess.CurrentBoardGUI:FindFirstChild(Chess.LastMove.from)
+	local toSquare = Chess.CurrentBoardGUI:FindFirstChild(Chess.LastMove.to)
+	
+	if fromSquare then
+		local highlight = Instance.new("Frame")
+		highlight.Size = UDim2.fromScale(1, 1)
+		highlight.BackgroundColor3 = Color3.fromRGB(255, 255, 0)
+		highlight.BackgroundTransparency = 0.8
+		highlight.Name = "LastMoveHighlight"
+		highlight.ZIndex = 3
+		highlight.Parent = fromSquare
 	end
 end
 
@@ -123,7 +170,7 @@ function Chess.SetupSquareConnections(BoardFrame)
 			button.BackgroundTransparency = 1
 			button.Text = ""
 			button.Name = "ClickDetector"
-			button.ZIndex = 10 -- Ensure it's on top of other elements
+			button.ZIndex = 10
 			button.Parent = squareFrame
 			
 			button.MouseButton1Click:Connect(function()
@@ -180,7 +227,7 @@ end
 function Chess.HighlightPossibleMoves(fromIndex)
 	Chess.ClearHighlights()
 	
-	local possibleMoves = Util.GetPossibleMoves(Chess.CurrentBoard, fromIndex)
+	local possibleMoves = Util.GetLegalMoves(Chess.CurrentBoard, fromIndex)
 	print("Highlighting moves for square", fromIndex, "- Found", #possibleMoves, "possible moves")
 	
 	for _, moveIndex in ipairs(possibleMoves) do
@@ -231,6 +278,17 @@ function Chess.ClearSelection()
 	Chess.ClearHighlights()
 end
 
+function Chess.PlaySound(soundName)
+	if not Sounds then
+		return
+	end
+	
+	local sound = Sounds:FindFirstChild(soundName)
+	if sound then
+		sound:Play()
+	end
+end
+
 function Chess.AttemptMove(fromIndex, toIndex)
 	-- Validate move locally first
 	if not Util.IsValidMove(Chess.CurrentBoard, fromIndex, toIndex) then
@@ -239,6 +297,12 @@ function Chess.AttemptMove(fromIndex, toIndex)
 		return
 	end
 	
+	-- Store the last move for highlighting
+	Chess.LastMove = {
+		from = fromIndex,
+		to = toIndex
+	}
+	
 	-- Send move to server for verification
 	MakeMoveRemote:FireServer(fromIndex, toIndex)
 	Chess.ClearSelection()
@@ -246,11 +310,64 @@ end
 
 function Chess.UpdateBoard(newFEN)
 	if Chess.CurrentBoardGUI then
+		local oldFEN = Chess.CurrentFEN
 		Chess.CurrentFEN = newFEN
+		
+		if Chess.LastMove and oldFEN then
+			Chess.PlayMoveSound(oldFEN, newFEN)
+		end
+		
 		Chess.RenderFENToGUI(Chess.CurrentBoardGUI, newFEN)
 		Chess.ClearSelection()
 		print("Board updated with FEN:", newFEN)
 	end
+end
+
+function Chess.PlayMoveSound(oldFEN, newFEN)
+	if not Chess.LastMove then
+		return
+	end
+	
+	local oldBoard = {
+		Square = table.create(64, 0),
+		ColourToMove = Piece.White,
+		CastlingRights = {WhiteKingside = true, WhiteQueenside = true, BlackKingside = true, BlackQueenside = true},
+		EnPassantSquare = 0, HalfmoveClock = 0, FullmoveNumber = 1, GameState = "Playing"
+	}
+	local newBoard = {
+		Square = table.create(64, 0),
+		ColourToMove = Piece.White,
+		CastlingRights = {WhiteKingside = true, WhiteQueenside = true, BlackKingside = true, BlackQueenside = true},
+		EnPassantSquare = 0, HalfmoveClock = 0, FullmoveNumber = 1, GameState = "Playing"
+	}
+	
+	Util.LoadPositionFromFen(oldBoard, oldFEN)
+	Util.LoadPositionFromFen(newBoard, newFEN)
+	
+	local fromIndex = Chess.LastMove.from
+	local toIndex = Chess.LastMove.to
+	local movingPiece = oldBoard.Square[fromIndex]
+	local capturedPiece = oldBoard.Square[toIndex]
+	local pieceType = Util.GetPieceType(movingPiece)
+	local pieceColor = Util.IsColour(movingPiece, Piece.White) and Piece.White or Piece.Black
+	local fromFile, fromRank = Util.IndexToCoords(fromIndex)
+	local toFile, toRank = Util.IndexToCoords(toIndex)
+	
+	local soundToPlay = "move"
+	
+	if pieceType == Piece.King and math.abs(toFile - fromFile) == 2 then
+		soundToPlay = "castle"
+	elseif pieceType == Piece.Pawn and (toRank == 0 or toRank == 7) then
+		soundToPlay = "promote"
+	elseif capturedPiece ~= Piece.None then
+		soundToPlay = "capture"
+	end
+	
+	if Util.IsInCheck(newBoard, newBoard.ColourToMove) then
+		soundToPlay = "move-check"
+	end
+	
+	Chess.PlaySound(soundToPlay)
 end
 
 function Chess.GetData()

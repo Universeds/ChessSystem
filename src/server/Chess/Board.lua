@@ -14,6 +14,16 @@ function Board.new()
 	self.Square = table.create(64, 0)
 	self.ColourToMove = Piece.White
 	self.FEN = StandardPosition
+	self.CastlingRights = {
+		WhiteKingside = true,
+		WhiteQueenside = true,
+		BlackKingside = true,
+		BlackQueenside = true
+	}
+	self.EnPassantSquare = 0
+	self.HalfmoveClock = 0
+	self.FullmoveNumber = 1
+	self.GameState = "Playing"
 
 	Util.LoadPositionFromFen(self, self.FEN)
 	return self
@@ -47,7 +57,6 @@ function Board:MakeMove(fromIndex, toIndex)
 end
 
 function Board:IsValidMove(fromIndex, toIndex)
-	-- Check if it's the correct player's turn
 	local piece = self.Square[fromIndex]
 	if piece == Piece.None then
 		return false
@@ -59,6 +68,52 @@ function Board:IsValidMove(fromIndex, toIndex)
 	end
 	
 	return Util.IsValidMove(self, fromIndex, toIndex)
+end
+
+function Board:GetLegalMoves(fromIndex)
+	return Util.GetLegalMoves(self, fromIndex)
+end
+
+function Board:IsInCheck(color)
+	return Util.IsInCheck(self, color or self.ColourToMove)
+end
+
+function Board:GetGameState()
+	return self.GameState
+end
+
+function Board:IsGameOver()
+	return self.GameState ~= "Playing"
+end
+
+function Board:GetWinner()
+	if self.GameState == "WhiteWins" then
+		return Piece.White
+	elseif self.GameState == "BlackWins" then
+		return Piece.Black
+	else
+		return nil
+	end
+end
+
+function Board:IsDraw()
+	return self.GameState == "Draw"
+end
+
+function Board:CanCastle(color, side)
+	if color == Piece.White then
+		if side == "kingside" then
+			return self.CastlingRights.WhiteKingside and Util.CanCastleKingside(self, color)
+		else
+			return self.CastlingRights.WhiteQueenside and Util.CanCastleQueenside(self, color)
+		end
+	else
+		if side == "kingside" then
+			return self.CastlingRights.BlackKingside and Util.CanCastleKingside(self, color)
+		else
+			return self.CastlingRights.BlackQueenside and Util.CanCastleQueenside(self, color)
+		end
+	end
 end
 
 return Board
